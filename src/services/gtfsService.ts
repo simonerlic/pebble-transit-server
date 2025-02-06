@@ -1,25 +1,27 @@
 import fetch from "node-fetch";
 import GtfsRealtimeBindings from "gtfs-realtime-bindings";
 import { BusArrival, GTFSRoute } from "../types/gtfs";
-import JSZip, { JSZipObject } from "jszip";
+import JSZip from "jszip";
 
 export class GTFSService {
   private readonly feedUrl: string;
   private readonly staticGtfsUrl: string;
   private routes: Map<string, GTFSRoute>;
+  private trips: Map<string, GTFSTrip>;
 
   constructor(feedUrl: string, staticGtfsUrl: string) {
     this.feedUrl = feedUrl;
     this.staticGtfsUrl = staticGtfsUrl;
     this.routes = new Map();
+    this.trips = new Map();
   }
 
   async initialize(): Promise<void> {
-    // Load static GTFS route data
-    await this.loadRoutes();
+    // Load static GTFS route and trip data
+    await this.loadStaticData();
   }
 
-  private async loadRoutes(): Promise<void> {
+  private async loadStaticData(): Promise<void> {
     console.log(`Loading GTFS zip from: ${this.staticGtfsUrl}`);
 
     try {
@@ -36,64 +38,87 @@ export class GTFSService {
       const zip = new JSZip();
       const zipData = await zip.loadAsync(buffer);
 
-      // Find routes.txt in the zip
-      const routesFile = zipData.file("routes.txt");
-      if (!routesFile) {
-        throw new Error("routes.txt not found in GTFS zip");
-      }
+      // Load routes.txt
+      await this.loadRoutes(zipData);
 
-      const routesData = await routesFile.async("string");
-      const lines = routesData.split("\n");
-      console.log(`Loaded ${lines.length} lines from routes.txt`);
-
-      const header = lines[0].trim();
-
-      // Parse CSV data and populate routes map
-      lines.slice(1).forEach((line, index) => {
-        if (line.trim()) {
-          // Skip empty lines
-          const fields = line.split(",");
-          if (fields.length >= 6) {
-            // Ensure we have at least the required fields
-            const routeId = fields[0].trim();
-            const shortName = fields[1].trim();
-            const longName = fields[2].trim();
-            const routeColor = fields[4].trim();
-            const routeTextColor = fields[5].trim();
-
-            console.log(`Processing route line ${index + 1}:`, {
-              routeId,
-              shortName,
-              longName,
-              routeColor,
-              routeTextColor,
-            });
-
-            this.routes.set(routeId, {
-              routeId,
-              shortName,
-              longName,
-              routeColor: routeColor || "000000",
-              routeTextColor: routeTextColor || "FFFFFF",
-            });
-          } else {
-            console.warn(`Skipping invalid route line ${index + 1}:`, line);
-          }
-        }
-      });
-
-      // Log the contents of our routes map
-      console.log("\nLoaded routes:");
-      for (const [routeId, route] of this.routes.entries()) {
-        console.log(`${routeId}:`, route);
-      }
+      // Load trips.txt
+      await this.loadTrips(zipData);
     } catch (error) {
-      console.error("Error loading routes.txt:", error);
+      console.error("Error loading GTFS data:", error);
       throw error;
     }
   }
 
-  private async loadTrips(): Promise<void> {}
+  private async loadRoutes(zipData: JSZip): Promise<void> {
+    const routesFile = zipData.file("routes.txt");
+    if (!routesFile) {
+      throw new Error("routes.txt not found in GTFS zip");
+    }
+
+    const routesData = await routesFile.async("string");
+    console.log("Processing routes.txt...");
+
+    const lines = routesData.split("\n");
+    const header = lines[0].trim();
+    console.log("Routes header:", header);
+
+    lines.slice(1).forEach((line, index) => {
+      if (line.trim()) {
+        const fields = line.split(",");
+        if (fields.length >= 6) {
+          const routeId = fields[0].trim();
+          const shortName = fields[1].trim();
+          const longName = fields[2].trim();
+          const routeColor = fields[4].trim();
+          const routeTextColor = fields[5].trim();
+
+          this.routes.set(routeId, {
+            routeId,
+            shortName,
+            longName,
+            routeColor: routeColor || "000000",
+            routeTextColor: routeTextColor || "FFFFFF",
+          });
+        }
+      }
+    });
+
+    console.log(`Loaded ${this.routes.size} routes`);
+  }
+
+  private async loadTrips(zipData: JSZip): Promise<void> {
+    const tripsFile = zipData.file("trips.txt");
+    if (!tripsFile) {
+      throw new Error("trips.txt not found in GTFS zip");
+    }
+
+    const tripsData = await tripsFile.async("string");
+    console.log("Processing trips.txt...");
+
+    const lines = tripsData.split("\n");
+    const header = lines[0].trim();
+    console.log("Trips header:", header);
+
+    lines.slice(1).forEach((line, index) => {
+      if (line.trim()) {
+        const fields = line.split(",");
+        if (fields.length >= 4) {
+          // Adjust based on your trips.txt format
+          const routeId = fields[0].trim();
+          const tripId = fields[2].trim();
+          const tripHeadsign = fields[3].trim();
+
+          this.trips.set(tripId, {
+            tripId,
+            routeId,
+            tripHeadsign,
+          });
+        }
+      }
+    });
+
+    console.log(`Loaded ${this.trips.size} trips`);
+  }
 
   private getOrCreateRoute(routeId: string): GTFSRoute {
     let route = this.routes.get(routeId);
@@ -133,15 +158,15 @@ export class GTFSService {
 
     console.log(`Decoded feed with ${feed.entity.length} entities`);
 
-    const arrivals = new Map<string, number[]>();
+    // Modified to store trip information along with times
+    const arrivals = new Map<string, Array<{ time: number; tripId: string }>>();
 
     // Process GTFS-realtime feed
     let matchingUpdates = 0;
     feed.entity.forEach((entity) => {
       if (entity.tripUpdate && entity.tripUpdate.stopTimeUpdate) {
-        console.log(
-          `Processing trip update for trip ID: ${entity.tripUpdate.trip?.tripId}`,
-        );
+        const tripId = entity.tripUpdate.trip?.tripId;
+        console.log(`Processing trip update for trip ID: ${tripId}`);
 
         entity.tripUpdate.stopTimeUpdate.forEach((update) => {
           console.log(
@@ -151,16 +176,20 @@ export class GTFSService {
           if (
             update.stopId === stopId &&
             update.arrival &&
-            update.arrival.time
+            update.arrival.time &&
+            tripId
           ) {
-            const routeId = entity.tripUpdate?.trip?.routeId;
+            const routeId = entity.tripUpdate.trip?.routeId;
             console.log(`  Match found - Route ID: ${routeId}`);
 
             if (routeId) {
               if (!arrivals.has(routeId)) {
                 arrivals.set(routeId, []);
               }
-              arrivals.get(routeId)?.push(Number(update.arrival.time));
+              arrivals.get(routeId)?.push({
+                time: Number(update.arrival.time),
+                tripId,
+              });
               matchingUpdates++;
             }
           }
@@ -174,20 +203,33 @@ export class GTFSService {
     console.log(`Processing ${arrivals.size} unique routes with arrivals`);
 
     const results: BusArrival[] = [];
-    for (const [routeId, times] of arrivals) {
+    for (const [routeId, arrivalData] of arrivals) {
       console.log(
-        `Processing route ${routeId} with ${times.length} arrival times`,
+        `Processing route ${routeId} with ${arrivalData.length} arrival times`,
       );
 
       const route = this.routes.get(routeId);
       if (route) {
-        const sortedTimes = times.sort();
+        // Sort by time and take first 3 arrivals
+        const sortedArrivals = arrivalData
+          .sort((a, b) => a.time - b.time)
+          .slice(0, 3);
+
         console.log(
           `  Route details found - Short name: ${route.shortName}, Long name: ${route.longName}`,
         );
         console.log(
-          `  Arrival times: ${sortedTimes.slice(0, 3).map((t) => new Date(t * 1000).toISOString())}`,
+          `  Arrival times: ${sortedArrivals.map((a) => new Date(a.time * 1000).toISOString())}`,
         );
+
+        // Get headsigns for each arrival
+        const arrivalTimesWithHeadsigns = sortedArrivals.map((arrival) => {
+          const trip = this.trips.get(arrival.tripId);
+          return {
+            time: arrival.time,
+            headsign: trip?.tripHeadsign || "",
+          };
+        });
 
         results.push({
           stopId,
@@ -196,7 +238,7 @@ export class GTFSService {
           routeLongName: route.longName,
           routeColor: route.routeColor,
           routeTextColor: route.routeTextColor,
-          arrivalTimes: sortedTimes.slice(0, 3), // Get next 3 arrivals
+          arrivalTimes: arrivalTimesWithHeadsigns,
         });
       } else {
         console.warn(`  No route details found for route ID: ${routeId}`);

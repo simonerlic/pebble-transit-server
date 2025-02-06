@@ -5,7 +5,8 @@ export interface BusArrival {
   routeLongName: string;
   routeColor: string;
   routeTextColor: string;
-  arrivalTimes: number[]; // Unix timestamps
+  tripHeadsign: string;
+  arrivalTimes: Array<{ time: number; headsign: string }>; // Time is Unix timestamp
 }
 
 export interface GTFSRoute {
@@ -14,4 +15,10 @@ export interface GTFSRoute {
   longName: string;
   routeColor: string;
   routeTextColor: string;
+}
+
+export interface GTFSTrip {
+  tripId: string;
+  routeId: string;
+  tripHeadsign: string;
 }
