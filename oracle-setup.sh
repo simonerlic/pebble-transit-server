@@ -21,7 +21,7 @@ git clone https://github.com/yourusername/pebble-transit-server.git
 cd pebble-transit-server
 
 # Install dependencies and build
-npm ci --only=production
+npm ci
 npm run build
 
 # Setup environment

@@ -45,7 +45,7 @@
     "@types/cors": "^2.8.19",
     "@types/express": "^4.17.17",
     "@types/morgan": "^1.9.10",
-    "@types/node": "^18.15.11",
+    "@types/node": "^18.19.111",
     "@types/node-fetch": "^2.6.3",
     "ts-node": "^10.9.2",
     "ts-node-dev": "^2.0.0",
