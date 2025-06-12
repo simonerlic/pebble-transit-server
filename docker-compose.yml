@@ -1,0 +1,164 @@
+version: '3.8'
+
+services:
+  # Main API service
+  transit-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: production
+    container_name: bc-transit-api
+    restart: unless-stopped
+    ports:
+      - "${PORT:-3000}:3000"
+    environment:
+      - NODE_ENV=production
+      - PORT=3000
+      - HOST=0.0.0.0
+      - GTFS_REALTIME_URL=https://bct.tmix.se/gtfs-realtime/tripupdates.pb?operatorIds=48
+      - GTFS_STATIC_URL=https://bct.tmix.se/Tmix.Cap.TdExport.WebApi/gtfs/?operatorIds=48
+      - RATE_LIMITING_ENABLED=true
+      - CACHE_ENABLED=true
+      - ENABLE_COMPRESSION=true
+      - ENABLE_SECURITY_HEADERS=true
+      - ACCESS_LOG_ENABLED=true
+      - TRUST_PROXY=true
+    networks:
+      - transit-network
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: '0.5'
+        reservations:
+          memory: 256M
+          cpus: '0.25'
+
+  # Development service (override for local development)
+  transit-api-dev:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: builder
+    container_name: bc-transit-api-dev
+    volumes:
+      - ./src:/app/src:ro
+      - ./package.json:/app/package.json:ro
+      - ./tsconfig.json:/app/tsconfig.json:ro
+      - node_modules:/app/node_modules
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=development
+      - PORT=3000
+      - HOST=0.0.0.0
+      - DEBUG=true
+      - GTFS_REALTIME_URL=https://bct.tmix.se/gtfs-realtime/tripupdates.pb?operatorIds=48
+      - GTFS_STATIC_URL=https://bct.tmix.se/Tmix.Cap.TdExport.WebApi/gtfs/?operatorIds=48
+      - RATE_LIMITING_ENABLED=false
+      - DEV_CORS_ALL_ORIGINS=true
+      - DEV_DETAILED_ERRORS=true
+    command: npm run dev
+    networks:
+      - transit-network
+    profiles:
+      - dev
+
+  # Redis for caching (optional production enhancement)
+  redis:
+    image: redis:7-alpine
+    container_name: transit-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+    volumes:
+      - redis_data:/data
+    networks:
+      - transit-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    profiles:
+      - cache
+      - production-full
+
+  # Nginx reverse proxy (production)
+  nginx:
+    image: nginx:alpine
+    container_name: transit-nginx
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./ssl:/etc/nginx/ssl:ro
+    depends_on:
+      - transit-api
+    networks:
+      - transit-network
+    profiles:
+      - production
+      - production-full
+
+  # Monitoring with Prometheus (optional)
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: transit-prometheus
+    restart: unless-stopped
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+      - '--web.enable-lifecycle'
+    networks:
+      - transit-network
+    profiles:
+      - monitoring
+      - production-full
+
+  # Grafana for dashboards (optional)
+  grafana:
+    image: grafana/grafana:latest
+    container_name: transit-grafana
+    restart: unless-stopped
+    ports:
+      - "3001:3000"
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./monitoring/grafana/dashboards:/etc/grafana/provisioning/dashboards:ro
+      - ./monitoring/grafana/datasources:/etc/grafana/provisioning/datasources:ro
+    depends_on:
+      - prometheus
+    networks:
+      - transit-network
+    profiles:
+      - monitoring
+      - production-full
+
+volumes:
+  node_modules:
+  redis_data:
+  prometheus_data:
+  grafana_data:
+
+networks:
+  transit-network:
+    driver: bridge
