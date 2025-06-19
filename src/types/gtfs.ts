@@ -17,6 +17,23 @@ export interface BusArrival {
   }>;
 }
 
+export interface BusDeparture {
+  stopId: string;
+  routeId: string;
+  routeShortName: string;
+  routeLongName: string;
+  routeColor: string;
+  routeTextColor: string;
+  tripHeadsign: string;
+  departureTimes: Array<{
+    time: number; // Unix timestamp
+    headsign: string;
+    minutesUntilDeparture: number;
+    isScheduled: boolean;
+    status: string; // "Departing", "Due", "5 min", etc.
+  }>;
+}
+
 export interface GTFSRoute {
   routeId: string;
   shortName: string;

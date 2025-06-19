@@ -318,6 +318,93 @@ gtfsService
       }),
     );
 
+    // Scheduled departures endpoint
+    app.get(
+      "/api/departures/:stopId",
+      handleAsync(async (req, res) => {
+        const { routeId, max } = req.query;
+        const maxDepartures = Math.min(
+          validatePositiveInteger(max as string, 5),
+          env.maxArrivalsPerRoute,
+        );
+
+        if (env.debug) {
+          console.log(
+            `Departures request: stop=${req.params.stopId}, route=${routeId}, max=${maxDepartures}`,
+          );
+        }
+
+        const departures = await gtfsService.getScheduledDepartures(
+          req.params.stopId,
+          routeId as string,
+          maxDepartures,
+        );
+
+        res.json(
+          createSuccessResponse({
+            stopId: req.params.stopId,
+            departureCount: departures.length,
+            departures: departures,
+            isLiveData: false,
+            lastUpdated: new Date().toISOString(),
+            cacheTtl: env.cacheStaticDataTtl,
+            ...(routeId && { routeFilter: routeId as string }),
+          }),
+        );
+      }),
+    );
+
+    // Scheduled departures for specific route at stop
+    app.get(
+      "/api/departures/:stopId/route/:routeId",
+      handleAsync(async (req, res) => {
+        const departures = await gtfsService.getScheduledDeparturesForRoute(
+          req.params.stopId,
+          req.params.routeId,
+        );
+
+        res.json(
+          createSuccessResponse({
+            stopId: req.params.stopId,
+            routeId: req.params.routeId,
+            departureCount: departures.length,
+            departures: departures,
+            isLiveData: false,
+            lastUpdated: new Date().toISOString(),
+          }),
+        );
+      }),
+    );
+
+    // Next scheduled departure for route at stop
+    app.get(
+      "/api/departures/:stopId/route/:routeId/next",
+      handleAsync(async (req, res) => {
+        const nextDeparture =
+          await gtfsService.getNextScheduledDepartureForRoute(
+            req.params.stopId,
+            req.params.routeId,
+          );
+
+        if (!nextDeparture) {
+          res
+            .status(404)
+            .json(createErrorResponse("No upcoming departures found"));
+          return;
+        }
+
+        res.json(
+          createSuccessResponse({
+            stopId: req.params.stopId,
+            routeId: req.params.routeId,
+            nextDeparture: nextDeparture,
+            isLiveData: false,
+            lastUpdated: new Date().toISOString(),
+          }),
+        );
+      }),
+    );
+
     // Nearby stops endpoint
     if (env.enableNearbyStops) {
       app.get(
@@ -566,6 +653,24 @@ gtfsService
               path: "/api/arrivals/:stopId/route/:routeId/next",
               method: "GET",
               description: "Get the next single arrival for a route at stop",
+            },
+            departures: {
+              path: "/api/departures/:stopId",
+              method: "GET",
+              description: "Get scheduled departures for a specific stop",
+              params: "routeId (optional filter), max (optional, default 5)",
+            },
+            scheduledDeparturesForRoute: {
+              path: "/api/departures/:stopId/route/:routeId",
+              method: "GET",
+              description:
+                "Get scheduled departures for specific route at stop",
+            },
+            nextDeparture: {
+              path: "/api/departures/:stopId/route/:routeId/next",
+              method: "GET",
+              description:
+                "Get the next scheduled departure for a route at stop",
             },
             nearbyStops: env.enableNearbyStops
               ? {

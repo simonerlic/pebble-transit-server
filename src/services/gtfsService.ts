@@ -2,6 +2,7 @@ import fetch from "node-fetch";
 import GtfsRealtimeBindings from "gtfs-realtime-bindings";
 import {
   BusArrival,
+  BusDeparture,
   GTFSRoute,
   GTFSTrip,
   GTFSStop,
@@ -487,6 +488,147 @@ export class GTFSService {
     if (delaySeconds > 300) return "Delayed";
     if (delaySeconds < -60) return "Early";
     return `${minutesUntil} min`;
+  }
+
+  private getDepartureStatus(minutesUntil: number): string {
+    if (minutesUntil <= 1) return "Departing";
+    if (minutesUntil <= 2) return "Due";
+    return `${minutesUntil} min`;
+  }
+
+  // Parse GTFS time format (HH:MM:SS) to today's timestamp
+  private parseGtfsTime(timeStr: string): number {
+    const [hours, minutes, seconds] = timeStr.split(":").map(Number);
+    const now = new Date();
+    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+
+    // Handle times past midnight (e.g., 24:30:00, 25:15:00)
+    if (hours >= 24) {
+      today.setDate(today.getDate() + 1);
+      today.setHours(hours - 24, minutes, seconds, 0);
+    } else {
+      today.setHours(hours, minutes, seconds, 0);
+    }
+
+    return Math.floor(today.getTime() / 1000);
+  }
+
+  // Get scheduled departures for a stop
+  async getScheduledDepartures(
+    stopId: string,
+    routeFilter?: string,
+    maxDepartures: number = 5,
+  ): Promise<BusDeparture[]> {
+    console.log(
+      `Fetching scheduled departures for stop ID: ${stopId}${routeFilter ? `, route: ${routeFilter}` : ""}`,
+    );
+
+    const currentTime = Math.floor(Date.now() / 1000);
+    const departures = new Map<
+      string,
+      Array<{
+        time: number;
+        tripId: string;
+      }>
+    >();
+
+    // Process all trips and their stop times to find departures at this stop
+    for (const [tripId, stopTimes] of this.stopTimes) {
+      const trip = this.trips.get(tripId);
+      if (!trip) continue;
+
+      // Apply route filter if specified
+      if (routeFilter && trip.routeId !== routeFilter) continue;
+
+      // Find the stop time for this stop
+      const stopTime = stopTimes.find((st) => st.stopId === stopId);
+      if (!stopTime) continue;
+
+      const departureTime = this.parseGtfsTime(stopTime.departureTime);
+
+      // Only include future departures within the next 24 hours
+      if (departureTime > currentTime && departureTime < currentTime + 86400) {
+        if (!departures.has(trip.routeId)) {
+          departures.set(trip.routeId, []);
+        }
+        departures.get(trip.routeId)?.push({
+          time: departureTime,
+          tripId,
+        });
+      }
+    }
+
+    const results: BusDeparture[] = [];
+
+    // Convert to BusDeparture format
+    for (const [routeId, departureData] of departures) {
+      console.log(
+        `Processing route ${routeId} with ${departureData.length} departure times`,
+      );
+
+      const route = this.routes.get(routeId);
+      if (route) {
+        // Sort by time and take requested number of departures
+        const sortedDepartures = departureData
+          .sort((a, b) => a.time - b.time)
+          .slice(0, maxDepartures);
+
+        console.log(
+          `  Route details found - Short name: ${route.shortName}, Long name: ${route.longName}`,
+        );
+        console.log(
+          `  Departure times: ${sortedDepartures.map((d) => new Date(d.time * 1000).toISOString())}`,
+        );
+
+        // Get headsigns and timing info for each departure
+        const departureTimesWithHeadsigns = sortedDepartures.map(
+          (departure) => {
+            const trip = this.trips.get(departure.tripId);
+            const minutesUntilDeparture = Math.floor(
+              (departure.time - currentTime) / 60,
+            );
+
+            return {
+              time: departure.time,
+              headsign: trip?.tripHeadsign || "",
+              minutesUntilDeparture,
+              isScheduled: true,
+              status: this.getDepartureStatus(minutesUntilDeparture),
+            };
+          },
+        );
+
+        results.push({
+          stopId,
+          routeId,
+          routeShortName: route.shortName,
+          routeLongName: route.longName,
+          routeColor: route.routeColor,
+          routeTextColor: route.routeTextColor,
+          tripHeadsign: departureTimesWithHeadsigns[0]?.headsign || "",
+          departureTimes: departureTimesWithHeadsigns,
+        });
+      }
+    }
+
+    return results;
+  }
+
+  // Get scheduled departures for a specific route at a stop
+  async getScheduledDeparturesForRoute(
+    stopId: string,
+    routeId: string,
+  ): Promise<BusDeparture[]> {
+    return this.getScheduledDepartures(stopId, routeId, 10);
+  }
+
+  // Get the next scheduled departure for a specific route at a stop
+  async getNextScheduledDepartureForRoute(
+    stopId: string,
+    routeId: string,
+  ): Promise<BusDeparture | null> {
+    const departures = await this.getScheduledDepartures(stopId, routeId, 1);
+    return departures.length > 0 ? departures[0] : null;
   }
 
   // Enhanced method for live updates with route filtering

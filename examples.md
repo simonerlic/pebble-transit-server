@@ -44,6 +44,60 @@ curl "http://localhost:3000/api/arrivals/12345"
 }
 ```
 
+## 1.5. Getting Scheduled Departures
+
+Get scheduled departure times for a specific stop:
+
+```bash
+curl "http://localhost:3000/api/departures/12345"
+```
+
+Get departures for a specific route:
+
+```bash
+curl "http://localhost:3000/api/departures/12345?routeId=1&max=3"
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "timestamp": "2024-01-15T10:30:00.000Z",
+  "data": {
+    "stopId": "12345",
+    "departureCount": 2,
+    "departures": [
+      {
+        "stopId": "12345",
+        "routeId": "1",
+        "routeShortName": "1",
+        "routeLongName": "University/Downtown",
+        "routeColor": "FF0000",
+        "routeTextColor": "FFFFFF",
+        "tripHeadsign": "University",
+        "departureTimes": [
+          {
+            "time": 1642248720,
+            "headsign": "University",
+            "minutesUntilDeparture": 8,
+            "isScheduled": true,
+            "status": "8 min"
+          }
+        ]
+      }
+    ],
+    "isLiveData": false,
+    "cacheTtl": 3600
+  }
+}
+```
+
+Get the next departure for a specific route:
+
+```bash
+curl "http://localhost:3000/api/departures/12345/route/1/next"
+```
+
 ## 2. Finding Nearby Stops
 
 Find transit stops within 1km of downtown Victoria:
@@ -327,6 +381,17 @@ async function getBusArrivals(stopId) {
   return data.data.arrivals;
 }
 
+// Get scheduled departures
+async function getScheduledDepartures(stopId, routeId) {
+  const url = routeId 
+    ? `http://localhost:3000/api/departures/${stopId}?routeId=${routeId}`
+    : `http://localhost:3000/api/departures/${stopId}`;
+  
+  const response = await fetch(url);
+  const data = await response.json();
+  return data.data.departures;
+}
+
 // Get real-time vehicle positions
 async function getVehiclePositions(routeId) {
   const url = routeId 
@@ -344,6 +409,9 @@ getNearbyStops(48.4284, -123.3656, 1000)
 
 getBusArrivals('12345')
   .then(arrivals => console.log('Next arrivals:', arrivals));
+
+getScheduledDepartures('12345', '1')
+  .then(departures => console.log('Scheduled departures:', departures));
 
 getVehiclePositions('1')
   .then(vehicles => console.log('Route 1 buses:', vehicles));
@@ -398,6 +466,16 @@ def get_bus_arrivals(stop_id):
     data = response.json()
     return data['data']['arrivals'] if data['success'] else []
 
+def get_scheduled_departures(stop_id, route_id=None):
+    """Get scheduled departures for a stop"""
+    url = f"{BASE_URL}/departures/{stop_id}"
+    if route_id:
+        url += f"?routeId={route_id}"
+    
+    response = requests.get(url)
+    data = response.json()
+    return data['data']['departures'] if data['success'] else []
+
 def get_vehicle_positions(route_id=None):
     """Get real-time vehicle positions"""
     url = f"{BASE_URL}/vehicles"
@@ -418,6 +496,10 @@ if __name__ == "__main__":
     if stops:
         arrivals = get_bus_arrivals(stops[0]['stop']['stopId'])
         print(f"Next {len(arrivals)} arrivals at {stops[0]['stop']['stopName']}")
+        
+        # Get scheduled departures for the same stop
+        departures = get_scheduled_departures(stops[0]['stop']['stopId'])
+        print(f"Next {len(departures)} scheduled departures at {stops[0]['stop']['stopName']}")
     
     # Get all active buses
     vehicles = get_vehicle_positions()
@@ -433,11 +515,14 @@ async function buildTransitApp(userLat, userLon) {
   // 1. Find nearby stops
   const nearbyStops = await getNearbyStops(userLat, userLon, 800);
   
-  // 2. Get arrivals for each stop
-  const stopsWithArrivals = await Promise.all(
+  // 2. Get arrivals and departures for each stop
+  const stopsWithData = await Promise.all(
     nearbyStops.slice(0, 5).map(async ({ stop, distance }) => {
-      const arrivals = await getBusArrivals(stop.stopId);
-      return { stop, distance, arrivals };
+      const [arrivals, departures] = await Promise.all([
+        getBusArrivals(stop.stopId),
+        getScheduledDepartures(stop.stopId)
+      ]);
+      return { stop, distance, arrivals, departures };
     })
   );
   
@@ -445,7 +530,7 @@ async function buildTransitApp(userLat, userLon) {
   const allVehicles = await getVehiclePositions();
   
   return {
-    nearbyStops: stopsWithArrivals,
+    nearbyStops: stopsWithData,
     activeVehicles: allVehicles
   };
 }
@@ -476,13 +561,14 @@ function createStopMonitor(stopId) {
   const updateInterval = 30000; // 30 seconds
   
   async function update() {
-    const [arrivals, alerts] = await Promise.all([
+    const [arrivals, departures, alerts] = await Promise.all([
       getBusArrivals(stopId),
+      getScheduledDepartures(stopId),
       fetch(`${BASE_URL}/alerts?stopId=${stopId}`).then(r => r.json())
     ]);
     
-    console.log(`Stop ${stopId} - ${arrivals.length} arrivals, ${alerts.data?.alertCount || 0} alerts`);
-    return { arrivals, alerts: alerts.data?.alerts || [] };
+    console.log(`Stop ${stopId} - ${arrivals.length} arrivals, ${departures.length} departures, ${alerts.data?.alertCount || 0} alerts`);
+    return { arrivals, departures, alerts: alerts.data?.alerts || [] };
   }
   
   // Initial update
