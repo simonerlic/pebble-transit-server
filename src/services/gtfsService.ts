@@ -568,8 +568,27 @@ export class GTFSService {
 
       const route = this.routes.get(routeId);
       if (route) {
-        // Sort by time and take requested number of departures
-        const sortedDepartures = departureData
+        // Deduplicate departures by time - GTFS data often contains multiple trips for the same route
+        // that have identical departure times from the same stop. This can happen due to:
+        // 1. Multiple service calendars (weekday/weekend/holiday variants with same schedules)
+        // 2. Multiple trip patterns (express/local/limited variants departing at same time)
+        // 3. Different directional trips or slight route variations under same route ID
+        // Without deduplication, each departure time appears multiple times in the API response
+        const uniqueDepartures = new Map<
+          number,
+          { time: number; tripId: string }
+        >();
+        departureData.forEach((departure) => {
+          if (!uniqueDepartures.has(departure.time)) {
+            uniqueDepartures.set(departure.time, departure);
+          }
+        });
+
+        console.log(
+          `  Before deduplication: ${departureData.length} departures, after deduplication: ${uniqueDepartures.size} departures`,
+        );
+
+        const sortedDepartures = Array.from(uniqueDepartures.values())
           .sort((a, b) => a.time - b.time)
           .slice(0, maxDepartures);
 
